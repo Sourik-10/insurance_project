@@ -29,7 +29,7 @@ Python | Pandas | NumPy | Scikit-learn | XGBoost | FastAPI | Streamlit
 
 This project helped me understand the importance of data preprocessing, domain-based feature engineering, model evaluation, and integrating a trained ML model into a usable application.
 
-🔗 **GitHub Repository:** [Add your repository link]
+🔗 **GitHub Repository:** https://github.com/Sourik-10/insurance_project
 
 🌐 **Live Demo:** [Add your deployed demo link]
 
