@@ -31,7 +31,7 @@ This project helped me understand the importance of data preprocessing, domain-b
 
 🔗 **GitHub Repository:** https://github.com/Sourik-10/insurance_project
 
-🌐 **Live Demo:** [Add your deployed demo link]
+🌐 **Live Demo:** https://sourik-10-insurance-project-streamlit-app-9fxdqw.streamlit.app/
 
 *Note: Predictions are model-based estimates trained on a specific dataset, not actual insurance quotes or medical advice.*
 
