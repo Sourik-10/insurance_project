@@ -1,12 +1,20 @@
 import os
 
+import joblib
+import pandas as pd
 import requests
 import streamlit as st
 
 
 DEFAULT_API_URL = os.getenv("INSURANCE_API_URL", "http://127.0.0.1:8000")
+MODEL_PATH = "models/best_model.pkl"
 
-st.set_page_config(page_title="Insurance Charge Predictor", page_icon="🩺", layout="centered")
+st.set_page_config(
+    page_title="Insurance Charge Predictor",
+    page_icon="🩺",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 st.markdown("""
 <style>
     .block-container {max-width: 900px; padding-top: 2.2rem; padding-bottom: 3rem;}
@@ -14,11 +22,12 @@ st.markdown("""
         background: linear-gradient(125deg, #102a43 0%, #176b74 100%); color: white;}
     .hero h1 {color: white; font-size: 2rem; margin: 0 0 .45rem 0;}
     .hero p {color: #e2f3f2; margin: 0; font-size: 1rem;}
-    .hint {color: #627487; font-size: .88rem; padding-top: .15rem;}
-    div[data-testid="stForm"] {border: 1px solid #dce5eb; border-radius: 16px; padding: 1.2rem 1.4rem;}
-    div[data-testid="stMetric"] {background: #f4f8fa; border: 1px solid #e2eaef; padding: 1rem; border-radius: 12px;}
+    .hint {color: #8a99a8; font-size: .88rem; padding-top: .15rem;}
+    /* translucent greys so cards stay readable in both light and dark themes */
+    div[data-testid="stForm"] {border: 1px solid rgba(128,128,128,.3); border-radius: 16px; padding: 1.2rem 1.4rem;}
+    div[data-testid="stMetric"] {background: rgba(128,128,128,.10); border: 1px solid rgba(128,128,128,.25); padding: 1rem; border-radius: 12px;}
     div.stButton > button {border-radius: 10px; font-weight: 650; min-height: 3rem;}
-    [data-testid="stSidebar"] {border-right: 1px solid #e4ebef;}
+    [data-testid="stSidebar"] {border-right: 1px solid rgba(128,128,128,.25);}
 </style>
 <div class="hero">
   <h1>🩺 Insurance Charge Predictor</h1>
@@ -27,9 +36,60 @@ st.markdown("""
 """, unsafe_allow_html=True)
 st.caption("BMI is calculated from height and weight. This model estimate is not an insurance quote.")
 
+
+# ---- Local inference (same feature logic as api.py / 02_feature_engineering.py - keep in sync) ----
+@st.cache_resource
+def load_model():
+    return joblib.load(MODEL_PATH)
+
+
+def bmi_category(bmi: float) -> str:
+    if bmi < 18.5:
+        return "underweight"
+    if bmi < 25:
+        return "normal"
+    if bmi < 30:
+        return "overweight"
+    return "obese"
+
+
+def age_group(age: int) -> str:
+    if age <= 25:
+        return "18-25"
+    if age <= 35:
+        return "26-35"
+    if age <= 45:
+        return "36-45"
+    if age <= 55:
+        return "46-55"
+    return "56-64"
+
+
+def predict_locally(payload: dict) -> dict:
+    model = load_model()
+    row = pd.DataFrame([{
+        "age": payload["age"],
+        "bmi": payload["bmi"],
+        "children": payload["children"],
+        "sex": payload["sex"],
+        "smoker": payload["smoker"],
+        "region": payload["region"],
+        "bmi_category": bmi_category(payload["bmi"]),
+        "age_group": age_group(payload["age"]),
+        "smoker_obese": int(payload["smoker"] == "yes" and payload["bmi"] >= 30),
+    }])
+    prediction = max(float(model.predict(row)[0]), 0.0)  # a linear model can dip below zero at the extremes
+    return {
+        "predicted_charges": round(prediction, 2),
+        "bmi_category": bmi_category(payload["bmi"]),
+        "smoker_obese_risk": bool(payload["smoker"] == "yes" and payload["bmi"] >= 30),
+    }
+
+
 with st.sidebar:
-    st.subheader("API connection")
-    api_url = st.text_input("FastAPI base URL", value=DEFAULT_API_URL).strip().rstrip("/")
+    st.subheader("Advanced")
+    use_api = st.checkbox("Use FastAPI backend instead of the built-in model", value=False)
+    api_url = st.text_input("FastAPI base URL", value=DEFAULT_API_URL, disabled=not use_api).strip().rstrip("/")
     st.caption("Start the API with `uvicorn api:app --reload`.")
 
 with st.form("prediction_form", border=True):
@@ -64,25 +124,36 @@ if submitted:
         "smoker": smoker,
         "region": region,
     }
-    try:
-        response = requests.post(f"{api_url}/predict", json=payload, timeout=15)
-        if response.ok:
-            result = response.json()
-            st.markdown("### Your estimate")
-            st.success("Estimate calculated successfully")
-            st.metric("Estimated annual charges", f"${result['predicted_charges']:,.2f}")
-            col1, col2 = st.columns(2)
-            col1.metric("Calculated BMI", f"{bmi:.1f}", result["bmi_category"].title())
-            col2.metric("Smoker and obese indicator", "Yes" if result["smoker_obese_risk"] else "No")
-        else:
-            try:
-                detail = response.json().get("detail", response.text)
-            except ValueError:
-                detail = response.text
-            st.error(f"API returned {response.status_code}: {detail}")
-    except requests.exceptions.ConnectionError:
-        st.error(f"Could not connect to {api_url}. Make sure the FastAPI server is running.")
-    except requests.exceptions.Timeout:
-        st.error("The API took too long to respond. Please try again.")
-    except requests.exceptions.RequestException as exc:
-        st.error(f"Request failed: {exc}")
+
+    result = None
+    if use_api:
+        try:
+            response = requests.post(f"{api_url}/predict", json=payload, timeout=15)
+            if response.ok:
+                result = response.json()
+            else:
+                try:
+                    detail = response.json().get("detail", response.text)
+                except ValueError:
+                    detail = response.text
+                st.error(f"API returned {response.status_code}: {detail}")
+        except requests.exceptions.ConnectionError:
+            st.error(f"Could not connect to {api_url}. Make sure the FastAPI server is running.")
+        except requests.exceptions.Timeout:
+            st.error("The API took too long to respond. Please try again.")
+        except requests.exceptions.RequestException as exc:
+            st.error(f"Request failed: {exc}")
+    else:
+        try:
+            result = predict_locally(payload)
+        except Exception as exc:  # missing model file or a scikit-learn version mismatch
+            st.error(f"Could not run the model: {exc}")
+
+    if result is not None:
+        st.markdown("### Your estimate")
+        st.success("Estimate calculated successfully")
+        st.metric("Estimated annual charges", f"${result['predicted_charges']:,.2f}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Calculated BMI", f"{bmi:.1f}")
+        col2.metric("BMI category", result["bmi_category"].title())
+        col3.metric("Smoker and obese", "Yes" if result["smoker_obese_risk"] else "No")
